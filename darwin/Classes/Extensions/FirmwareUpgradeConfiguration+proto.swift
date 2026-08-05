@@ -57,6 +57,7 @@ extension FirmwareUpgradeConfiguration {
             eraseAppSettings: eraseAppSettings,
             pipelineDepth: pipelineDepth,
             byteAlignment: byteAlignment,
+            reassemblyBufferSize: proto.reassemblyBufferSize,
             upgradeMode: mode
         )
     }
