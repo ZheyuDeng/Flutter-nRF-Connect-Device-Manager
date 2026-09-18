@@ -47,17 +47,9 @@ class DeviceUpdateManager extends FirmwareUpdateManager {
   // Stream<ProgressUpdate> get
 
   static Future<DeviceUpdateManager> getInstance(String deviceId) async {
-    try {
-      await methodChannel.invokeMethod(
-          UpdateManagerMethod.initializeUpdateManager.rawValue, deviceId);
-    } catch (error, stack) {
-      FlutterError.reportError(FlutterErrorDetails(
-        exception: error,
-        stack: stack,
-        library: 'mcumgr_flutter',
-        context: ErrorDescription('getInstance: initialize Update Manager'),
-      ));
-    }
+    // Never return a Dart manager when native initialization failed.
+    await methodChannel.invokeMethod(
+        UpdateManagerMethod.initializeUpdateManager.rawValue, deviceId);
 
     final um = DeviceUpdateManager._deviceIdentifier(deviceId);
     um._setupUpdateStateStream();

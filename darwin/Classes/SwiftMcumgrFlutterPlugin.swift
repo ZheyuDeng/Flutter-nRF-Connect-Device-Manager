@@ -9,7 +9,7 @@ import CoreBluetooth
 import iOSMcuManagerLibrary
 
 public class SwiftMcumgrFlutterPlugin: NSObject, FlutterPlugin {
-    private var initManagerResultQueue = ConcurrentQueue<(call: FlutterMethodCall, result: FlutterResult)>()
+    private let bluetoothReadyGate = BluetoothReadyGate()
 
     static let namespace = "mcumgr_flutter"
 
@@ -19,8 +19,7 @@ public class SwiftMcumgrFlutterPlugin: NSObject, FlutterPlugin {
     private var _centralManager: CBCentralManager?
     private var centralManager: CBCentralManager {
         if _centralManager == nil {
-            _centralManager = CBCentralManager()
-            _centralManager?.delegate = self
+            _centralManager = CBCentralManager(delegate: self, queue: .main)
         }
         return _centralManager!
     }
@@ -138,25 +137,28 @@ public class SwiftMcumgrFlutterPlugin: NSObject, FlutterPlugin {
     }
 
     private func initializeUpdateManager(call: FlutterMethodCall, result: @escaping FlutterResult) throws {
-        guard let uuidString = call.arguments as? String, let uuid = UUID(uuidString: uuidString) else {
+        guard let uuidString = call.arguments as? String, UUID(uuidString: uuidString) != nil else {
             throw FlutterError(code: ErrorCode.wrongArguments.rawValue, message: "Can not create UUID from provided arguments", details: call.debugDetails)
         }
 
-        // Access centralManager (this will lazily create it if needed)
         let manager = centralManager
-
-        // Check if Bluetooth is ready
-        if manager.state == .poweredOn {
-            guard let peripheral = manager.retrievePeripherals(withIdentifiers: [uuid]).first else {
-                throw FlutterError(code: ErrorCode.wrongArguments.rawValue, message: "Can't retrieve peripheral with provided UUID", details: call.debugDetails)
+        bluetoothReadyGate.update(manager.state)
+        bluetoothReadyGate.wait(ready: {
+            self.handlePostponedCall(call: call, result: result, central: manager)
+        }, failed: { state in
+            let message: String
+            switch state {
+            case .unauthorized: message = "Bluetooth is unauthorized"
+            case .unsupported: message = "Unsupported bluetooth state"
+            case .poweredOff: message = "Bluetooth is powered off"
+            default: message = "Bluetooth did not become ready within 5 seconds"
             }
-
-            try handleUpdateManager(for: peripheral, call: call)
-            result(nil)
-        } else {
-            // Bluetooth not ready yet, queue the request and wait for delegate callback
-            initManagerResultQueue.enqueue((call: call, result: result))
-        }
+            result(FlutterError(
+                code: ErrorCode.wrongArguments.rawValue,
+                message: message,
+                details: ["method": call.method, "bluetoothState": state.rawValue]
+            ))
+        })
     }
 
     private func handleUpdateManager(for peripheral: CBPeripheral, call: FlutterMethodCall) throws {
@@ -296,30 +298,7 @@ public class SwiftMcumgrFlutterPlugin: NSObject, FlutterPlugin {
 
 extension SwiftMcumgrFlutterPlugin: CBCentralManagerDelegate {
     public func centralManagerDidUpdateState(_ central: CBCentralManager) {
-        switch central.state {
-        case .poweredOn:
-            while let managerRequest = initManagerResultQueue.dequeue() {
-                handlePostponedCall(call: managerRequest.call, result: managerRequest.result, central: central)
-            }
-            break
-        case .unsupported:
-            while let managerRequest = initManagerResultQueue.dequeue() {
-                let error = FlutterError(code: ErrorCode.wrongArguments.rawValue, message: "Unsupported bluetooth state", details: managerRequest.call.debugDetails)
-                managerRequest.result(error)
-            }
-        case .unauthorized:
-            while let managerRequest = initManagerResultQueue.dequeue() {
-                let error = FlutterError(code: ErrorCode.wrongArguments.rawValue, message: "Bluetooth is unauthorized", details: managerRequest.call.debugDetails)
-                managerRequest.result(error)
-            }
-        case .poweredOff:
-            while let managerRequest = initManagerResultQueue.dequeue() {
-                let error = FlutterError(code: ErrorCode.wrongArguments.rawValue, message: "Bluetooth is powered off", details: managerRequest.call.debugDetails)
-                managerRequest.result(error)
-            }
-        default:
-            break
-        }
+        bluetoothReadyGate.update(central.state)
     }
 
     private func handlePostponedCall(call: FlutterMethodCall, result: FlutterResult, central: CBCentralManager) {
