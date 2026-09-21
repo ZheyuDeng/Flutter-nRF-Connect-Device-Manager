@@ -47,6 +47,25 @@ struct BluetoothReadyGateTests {
                 precondition(failures == [state])
             }
         }
+        // DFU and Settings can wait together; each must complete exactly once.
+        for becomesReady in [false, true] {
+            let shared = BluetoothReadyGate(timeout: 0.02)
+            var results: [String: Int] = [:]
+            for manager in ["dfu", "settings"] {
+                shared.wait(ready: {
+                    precondition(becomesReady)
+                    results[manager, default: 0] += 1
+                }, failed: { _ in
+                    precondition(!becomesReady)
+                    results[manager, default: 0] += 1
+                })
+            }
+            if becomesReady { shared.update(.poweredOn) }
+            spin()
+            shared.update(.poweredOn)
+            precondition(results == ["dfu": 1, "settings": 1])
+        }
+
         print("BluetoothReadyGate: recovery, timeout, late callback, retry and permission cases passed")
     }
 }

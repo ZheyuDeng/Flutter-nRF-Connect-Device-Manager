@@ -73,7 +73,7 @@ class FsManagerPlugin : FsManagerApi {
         managers[remoteId]?.cancelTransfer()
     }
     
-    func status(remoteId: String, path: String, completion: @escaping (Result<Int64, any Error>) -> Void) {
+    func status(remoteId: String, path: String, completion: @escaping (Result<Int64, Error>) -> Void) {
         do {
             let mgr = try getManager(remoteId)
             mgr.status(

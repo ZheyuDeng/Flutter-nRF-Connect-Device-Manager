@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:mcumgr_flutter_example/src/model/firmware_update_request.dart';
 import 'package:mcumgr_flutter_example/src/providers/firmware_update_request_provider.dart';
-import 'package:mcumgr_flutter_example/src/view/peripheral_select/peripheral_list.dart';
 import 'package:provider/provider.dart';
 
 class PeripheralSelect extends StatelessWidget {
@@ -12,19 +11,20 @@ class PeripheralSelect extends StatelessWidget {
     FirmwareUpdateRequest updateParameters =
         context.watch<FirmwareUpdateRequestProvider>().updateParameters;
 
-    return Column(
-      children: [
-        if (updateParameters.peripheral != null)
-          Text(updateParameters.peripheral!.name),
-        ElevatedButton(
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (context) => PeripheralList()),
-              );
-            },
-            child: Text('Select Peripheral')),
-      ],
+    return SizedBox(
+      width: double.infinity,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (updateParameters.peripheral != null) ...[
+            Text(
+              updateParameters.peripheral!.name,
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 8),
+          ],
+        ],
+      ),
     );
   }
 }

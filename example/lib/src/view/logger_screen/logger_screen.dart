@@ -11,7 +11,11 @@ class LoggerScreen extends StatelessWidget {
         appBar: AppBar(
           title: Text('Log'),
         ),
-        body: _logFutureBuilder());
+        body: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: _logFutureBuilder()
+        )
+    );
   }
 
   Widget _logFutureBuilder() {

@@ -26,13 +26,13 @@
 .dart_tool/
 .flutter-plugins
 .flutter-plugins-dependencies
+devtools_options.yaml
 .packages
 .pub-cache/
 .pub/
 /build/
 
 # Web related
-lib/generated_plugin_registrant.dart
 
 # Symbolication related
 app.*.symbols

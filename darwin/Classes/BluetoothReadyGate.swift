@@ -1,7 +1,7 @@
 import CoreBluetooth
 import Foundation
 
-/// Used only before creating an update manager. All calls run on the main queue.
+/// Used before creating update and settings managers. All calls run on the main queue.
 /// A newly created ASK-backed central may briefly report poweredOff before ready.
 final class BluetoothReadyGate {
     private struct Request {

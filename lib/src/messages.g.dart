@@ -245,6 +245,52 @@ class OnDownloadCompletedEvent extends DownloadCallbackEvent {
 ;
 }
 
+class ConnectionStateEvent {
+  ConnectionStateEvent({
+    required this.remoteId,
+    required this.connected,
+  });
+
+  String remoteId;
+
+  bool connected;
+
+  List<Object?> _toList() {
+    return <Object?>[
+      remoteId,
+      connected,
+    ];
+  }
+
+  Object encode() {
+    return _toList();  }
+
+  static ConnectionStateEvent decode(Object result) {
+    result as List<Object?>;
+    return ConnectionStateEvent(
+      remoteId: result[0]! as String,
+      connected: result[1]! as bool,
+    );
+  }
+
+  @override
+  // ignore: avoid_equals_and_hash_code_on_mutable_classes
+  bool operator ==(Object other) {
+    if (other is! ConnectionStateEvent || other.runtimeType != runtimeType) {
+      return false;
+    }
+    if (identical(this, other)) {
+      return true;
+    }
+    return _deepEquals(encode(), other.encode());
+  }
+
+  @override
+  // ignore: avoid_equals_and_hash_code_on_mutable_classes
+  int get hashCode => Object.hashAll(_toList())
+;
+}
+
 
 class _PigeonCodec extends StandardMessageCodec {
   const _PigeonCodec();
@@ -265,6 +311,9 @@ class _PigeonCodec extends StandardMessageCodec {
     }    else if (value is OnDownloadCompletedEvent) {
       buffer.putUint8(132);
       writeValue(buffer, value.encode());
+    }    else if (value is ConnectionStateEvent) {
+      buffer.putUint8(133);
+      writeValue(buffer, value.encode());
     } else {
       super.writeValue(buffer, value);
     }
@@ -281,6 +330,8 @@ class _PigeonCodec extends StandardMessageCodec {
         return OnDownloadCancelledEvent.decode(readValue(buffer)!);
       case 132: 
         return OnDownloadCompletedEvent.decode(readValue(buffer)!);
+      case 133: 
+        return ConnectionStateEvent.decode(readValue(buffer)!);
       default:
         return super.readValueOfType(type, buffer);
     }
@@ -294,12 +345,125 @@ Stream<DownloadCallbackEvent> getFileDownloadEvents( {String instanceName = ''})
     instanceName = '.$instanceName';
   }
   final EventChannel getFileDownloadEventsChannel =
-      EventChannel('dev.flutter.pigeon.mcumgr_flutter.FsManagerEvents.getFileDownloadEvents$instanceName', pigeonMethodCodec);
+      EventChannel('dev.flutter.pigeon.mcumgr_flutter.McumgrFlutterEvents.getFileDownloadEvents$instanceName', pigeonMethodCodec);
   return getFileDownloadEventsChannel.receiveBroadcastStream().map((dynamic event) {
     return event as DownloadCallbackEvent;
   });
 }
     
+Stream<ConnectionStateEvent> getConnectionStateEvents( {String instanceName = ''}) {
+  if (instanceName.isNotEmpty) {
+    instanceName = '.$instanceName';
+  }
+  final EventChannel getConnectionStateEventsChannel =
+      EventChannel('dev.flutter.pigeon.mcumgr_flutter.McumgrFlutterEvents.getConnectionStateEvents$instanceName', pigeonMethodCodec);
+  return getConnectionStateEventsChannel.receiveBroadcastStream().map((dynamic event) {
+    return event as ConnectionStateEvent;
+  });
+}
+    
+
+class CustomGroupManagerApi {
+  /// Constructor for [CustomGroupManagerApi].  The [binaryMessenger] named argument is
+  /// available for dependency injection.  If it is left null, the default
+  /// BinaryMessenger will be used which routes to the host platform.
+  CustomGroupManagerApi({BinaryMessenger? binaryMessenger, String messageChannelSuffix = ''})
+      : pigeonVar_binaryMessenger = binaryMessenger,
+        pigeonVar_messageChannelSuffix = messageChannelSuffix.isNotEmpty ? '.$messageChannelSuffix' : '';
+  final BinaryMessenger? pigeonVar_binaryMessenger;
+
+  static const MessageCodec<Object?> pigeonChannelCodec = _PigeonCodec();
+
+  final String pigeonVar_messageChannelSuffix;
+
+  /// Configures the SMP transport decorator for a specific device.
+  ///
+  /// [suffix] bytes are appended to every outgoing SMP packet.
+  /// [opOverride] overrides byte 0 (op) of the SMP header.
+  /// [flagsOverride] overrides byte 1 (flags) of the SMP header.
+  /// All parameters are optional; omit to leave the field unmodified.
+  Future<void> setupDecorator(String remoteId, Uint8List? suffix, int? opOverride, int? flagsOverride) async {
+    final String pigeonVar_channelName = 'dev.flutter.pigeon.mcumgr_flutter.CustomGroupManagerApi.setupDecorator$pigeonVar_messageChannelSuffix';
+    final BasicMessageChannel<Object?> pigeonVar_channel = BasicMessageChannel<Object?>(
+      pigeonVar_channelName,
+      pigeonChannelCodec,
+      binaryMessenger: pigeonVar_binaryMessenger,
+    );
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(<Object?>[remoteId, suffix, opOverride, flagsOverride]);
+    final List<Object?>? pigeonVar_replyList =
+        await pigeonVar_sendFuture as List<Object?>?;
+    if (pigeonVar_replyList == null) {
+      throw _createConnectionError(pigeonVar_channelName);
+    } else if (pigeonVar_replyList.length > 1) {
+      throw PlatformException(
+        code: pigeonVar_replyList[0]! as String,
+        message: pigeonVar_replyList[1] as String?,
+        details: pigeonVar_replyList[2],
+      );
+    } else {
+      return;
+    }
+  }
+
+  /// Sends a custom SMP command and returns the raw response payload
+  /// (the 8-byte SMP header is stripped before returning).
+  ///
+  /// [groupId]   – SMP group ID (e.g. `0x41` for a vendor-specific group).
+  /// [commandId] – command within the group.
+  /// [op]        – SMP operation code (`0` = read, `2` = write).
+  /// [payload]   – string-keyed map CBOR-encoded as the request payload.
+  Future<Uint8List> sendCustomCommand(String remoteId, int groupId, int commandId, int op, Map<String?, Object?> payload) async {
+    final String pigeonVar_channelName = 'dev.flutter.pigeon.mcumgr_flutter.CustomGroupManagerApi.sendCustomCommand$pigeonVar_messageChannelSuffix';
+    final BasicMessageChannel<Object?> pigeonVar_channel = BasicMessageChannel<Object?>(
+      pigeonVar_channelName,
+      pigeonChannelCodec,
+      binaryMessenger: pigeonVar_binaryMessenger,
+    );
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(<Object?>[remoteId, groupId, commandId, op, payload]);
+    final List<Object?>? pigeonVar_replyList =
+        await pigeonVar_sendFuture as List<Object?>?;
+    if (pigeonVar_replyList == null) {
+      throw _createConnectionError(pigeonVar_channelName);
+    } else if (pigeonVar_replyList.length > 1) {
+      throw PlatformException(
+        code: pigeonVar_replyList[0]! as String,
+        message: pigeonVar_replyList[1] as String?,
+        details: pigeonVar_replyList[2],
+      );
+    } else if (pigeonVar_replyList[0] == null) {
+      throw PlatformException(
+        code: 'null-error',
+        message: 'Host platform returned null value for non-null return value.',
+      );
+    } else {
+      return (pigeonVar_replyList[0] as Uint8List?)!;
+    }
+  }
+
+  /// Releases all native resources for the given device.
+  Future<void> kill(String remoteId) async {
+    final String pigeonVar_channelName = 'dev.flutter.pigeon.mcumgr_flutter.CustomGroupManagerApi.kill$pigeonVar_messageChannelSuffix';
+    final BasicMessageChannel<Object?> pigeonVar_channel = BasicMessageChannel<Object?>(
+      pigeonVar_channelName,
+      pigeonChannelCodec,
+      binaryMessenger: pigeonVar_binaryMessenger,
+    );
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(<Object?>[remoteId]);
+    final List<Object?>? pigeonVar_replyList =
+        await pigeonVar_sendFuture as List<Object?>?;
+    if (pigeonVar_replyList == null) {
+      throw _createConnectionError(pigeonVar_channelName);
+    } else if (pigeonVar_replyList.length > 1) {
+      throw PlatformException(
+        code: pigeonVar_replyList[0]! as String,
+        message: pigeonVar_replyList[1] as String?,
+        details: pigeonVar_replyList[2],
+      );
+    } else {
+      return;
+    }
+  }
+}
 
 class FsManagerApi {
   /// Constructor for [FsManagerApi].  The [binaryMessenger] named argument is

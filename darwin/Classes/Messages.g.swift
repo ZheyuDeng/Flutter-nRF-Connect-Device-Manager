@@ -275,6 +275,35 @@ struct OnDownloadCompletedEvent: DownloadCallbackEvent {
   }
 }
 
+/// Generated class from Pigeon that represents data sent in messages.
+struct ConnectionStateEvent: Hashable {
+  var remoteId: String
+  var connected: Bool
+
+
+  // swift-format-ignore: AlwaysUseLowerCamelCase
+  static func fromList(_ pigeonVar_list: [Any?]) -> ConnectionStateEvent? {
+    let remoteId = pigeonVar_list[0] as! String
+    let connected = pigeonVar_list[1] as! Bool
+
+    return ConnectionStateEvent(
+      remoteId: remoteId,
+      connected: connected
+    )
+  }
+  func toList() -> [Any?] {
+    return [
+      remoteId,
+      connected,
+    ]
+  }
+  static func == (lhs: ConnectionStateEvent, rhs: ConnectionStateEvent) -> Bool {
+    return deepEqualsMessages(lhs.toList(), rhs.toList())  }
+  func hash(into hasher: inout Hasher) {
+    deepHashMessages(value: toList(), hasher: &hasher)
+  }
+}
+
 private class MessagesPigeonCodecReader: FlutterStandardReader {
   override func readValue(ofType type: UInt8) -> Any? {
     switch type {
@@ -286,6 +315,8 @@ private class MessagesPigeonCodecReader: FlutterStandardReader {
       return OnDownloadCancelledEvent.fromList(self.readValue() as! [Any?])
     case 132:
       return OnDownloadCompletedEvent.fromList(self.readValue() as! [Any?])
+    case 133:
+      return ConnectionStateEvent.fromList(self.readValue() as! [Any?])
     default:
       return super.readValue(ofType: type)
     }
@@ -305,6 +336,9 @@ private class MessagesPigeonCodecWriter: FlutterStandardWriter {
       super.writeValue(value.toList())
     } else if let value = value as? OnDownloadCompletedEvent {
       super.writeByte(132)
+      super.writeValue(value.toList())
+    } else if let value = value as? ConnectionStateEvent {
+      super.writeByte(133)
       super.writeValue(value.toList())
     } else {
       super.writeValue(value)
@@ -383,7 +417,7 @@ class GetFileDownloadEventsStreamHandler: PigeonEventChannelWrapper<DownloadCall
   static func register(with messenger: FlutterBinaryMessenger,
                       instanceName: String = "",
                       streamHandler: GetFileDownloadEventsStreamHandler) {
-    var channelName = "dev.flutter.pigeon.mcumgr_flutter.FsManagerEvents.getFileDownloadEvents"
+    var channelName = "dev.flutter.pigeon.mcumgr_flutter.McumgrFlutterEvents.getFileDownloadEvents"
     if !instanceName.isEmpty {
       channelName += ".\(instanceName)"
     }
@@ -393,6 +427,117 @@ class GetFileDownloadEventsStreamHandler: PigeonEventChannelWrapper<DownloadCall
   }
 }
       
+class GetConnectionStateEventsStreamHandler: PigeonEventChannelWrapper<ConnectionStateEvent> {
+  static func register(with messenger: FlutterBinaryMessenger,
+                      instanceName: String = "",
+                      streamHandler: GetConnectionStateEventsStreamHandler) {
+    var channelName = "dev.flutter.pigeon.mcumgr_flutter.McumgrFlutterEvents.getConnectionStateEvents"
+    if !instanceName.isEmpty {
+      channelName += ".\(instanceName)"
+    }
+    let internalStreamHandler = PigeonStreamHandler<ConnectionStateEvent>(wrapper: streamHandler)
+    let channel = FlutterEventChannel(name: channelName, binaryMessenger: messenger, codec: messagesPigeonMethodCodec)
+    channel.setStreamHandler(internalStreamHandler)
+  }
+}
+      
+/// Generated protocol from Pigeon that represents a handler of messages from Flutter.
+protocol CustomGroupManagerApi {
+  /// Configures the SMP transport decorator for a specific device.
+  ///
+  /// [suffix] bytes are appended to every outgoing SMP packet.
+  /// [opOverride] overrides byte 0 (op) of the SMP header.
+  /// [flagsOverride] overrides byte 1 (flags) of the SMP header.
+  /// All parameters are optional; omit to leave the field unmodified.
+  func setupDecorator(remoteId: String, suffix: FlutterStandardTypedData?, opOverride: Int64?, flagsOverride: Int64?) throws
+  /// Sends a custom SMP command and returns the raw response payload
+  /// (the 8-byte SMP header is stripped before returning).
+  ///
+  /// [groupId]   – SMP group ID (e.g. `0x41` for a vendor-specific group).
+  /// [commandId] – command within the group.
+  /// [op]        – SMP operation code (`0` = read, `2` = write).
+  /// [payload]   – string-keyed map CBOR-encoded as the request payload.
+  func sendCustomCommand(remoteId: String, groupId: Int64, commandId: Int64, op: Int64, payload: [String?: Any?], completion: @escaping (Result<FlutterStandardTypedData, Error>) -> Void)
+  /// Releases all native resources for the given device.
+  func kill(remoteId: String) throws
+}
+
+/// Generated setup class from Pigeon to handle messages through the `binaryMessenger`.
+class CustomGroupManagerApiSetup {
+  static var codec: FlutterStandardMessageCodec { MessagesPigeonCodec.shared }
+  /// Sets up an instance of `CustomGroupManagerApi` to handle messages through the `binaryMessenger`.
+  static func setUp(binaryMessenger: FlutterBinaryMessenger, api: CustomGroupManagerApi?, messageChannelSuffix: String = "") {
+    let channelSuffix = messageChannelSuffix.count > 0 ? ".\(messageChannelSuffix)" : ""
+    /// Configures the SMP transport decorator for a specific device.
+    ///
+    /// [suffix] bytes are appended to every outgoing SMP packet.
+    /// [opOverride] overrides byte 0 (op) of the SMP header.
+    /// [flagsOverride] overrides byte 1 (flags) of the SMP header.
+    /// All parameters are optional; omit to leave the field unmodified.
+    let setupDecoratorChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.mcumgr_flutter.CustomGroupManagerApi.setupDecorator\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
+    if let api = api {
+      setupDecoratorChannel.setMessageHandler { message, reply in
+        let args = message as! [Any?]
+        let remoteIdArg = args[0] as! String
+        let suffixArg: FlutterStandardTypedData? = nilOrValue(args[1])
+        let opOverrideArg: Int64? = nilOrValue(args[2])
+        let flagsOverrideArg: Int64? = nilOrValue(args[3])
+        do {
+          try api.setupDecorator(remoteId: remoteIdArg, suffix: suffixArg, opOverride: opOverrideArg, flagsOverride: flagsOverrideArg)
+          reply(wrapResult(nil))
+        } catch {
+          reply(wrapError(error))
+        }
+      }
+    } else {
+      setupDecoratorChannel.setMessageHandler(nil)
+    }
+    /// Sends a custom SMP command and returns the raw response payload
+    /// (the 8-byte SMP header is stripped before returning).
+    ///
+    /// [groupId]   – SMP group ID (e.g. `0x41` for a vendor-specific group).
+    /// [commandId] – command within the group.
+    /// [op]        – SMP operation code (`0` = read, `2` = write).
+    /// [payload]   – string-keyed map CBOR-encoded as the request payload.
+    let sendCustomCommandChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.mcumgr_flutter.CustomGroupManagerApi.sendCustomCommand\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
+    if let api = api {
+      sendCustomCommandChannel.setMessageHandler { message, reply in
+        let args = message as! [Any?]
+        let remoteIdArg = args[0] as! String
+        let groupIdArg = args[1] as! Int64
+        let commandIdArg = args[2] as! Int64
+        let opArg = args[3] as! Int64
+        let payloadArg = args[4] as! [String?: Any?]
+        api.sendCustomCommand(remoteId: remoteIdArg, groupId: groupIdArg, commandId: commandIdArg, op: opArg, payload: payloadArg) { result in
+          switch result {
+          case .success(let res):
+            reply(wrapResult(res))
+          case .failure(let error):
+            reply(wrapError(error))
+          }
+        }
+      }
+    } else {
+      sendCustomCommandChannel.setMessageHandler(nil)
+    }
+    /// Releases all native resources for the given device.
+    let killChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.mcumgr_flutter.CustomGroupManagerApi.kill\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
+    if let api = api {
+      killChannel.setMessageHandler { message, reply in
+        let args = message as! [Any?]
+        let remoteIdArg = args[0] as! String
+        do {
+          try api.kill(remoteId: remoteIdArg)
+          reply(wrapResult(nil))
+        } catch {
+          reply(wrapError(error))
+        }
+      }
+    } else {
+      killChannel.setMessageHandler(nil)
+    }
+  }
+}
 /// Generated protocol from Pigeon that represents a handler of messages from Flutter.
 protocol FsManagerApi {
   /// Starts the download of a single file with a specific device.

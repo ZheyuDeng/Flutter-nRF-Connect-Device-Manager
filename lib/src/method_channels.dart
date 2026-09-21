@@ -39,6 +39,8 @@ class UpdateManagerMethod {
   static const cancel = const UpdateManagerMethod('cancel');
   static const kill = const UpdateManagerMethod('kill');
   static const readImageList = const UpdateManagerMethod('readImageList');
+  static const confirmImage = const UpdateManagerMethod('confirmImage');
+  static const erase = const UpdateManagerMethod('erase');
 }
 
 /// Channel methods related to Logger

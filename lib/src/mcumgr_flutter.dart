@@ -32,8 +32,7 @@ class FirmwareUpgradeConfiguration {
     this.byteAlignment = ImageUploadAlignment.fourByte,
     this.reassemblyBufferSize = 0,
     this.firmwareUpgradeMode = FirmwareUpgradeMode.confirmOnly,
-  }) : assert(reassemblyBufferSize >= 0,
-            "Reassembly Buffer Size must be a positive number or 0");
+  }) : assert(reassemblyBufferSize >= 0, "Reassembly Buffer Size must be a positive number or 0");
 }
 
 /// Object that handles update process.
@@ -66,9 +65,10 @@ abstract class FirmwareUpdateManager {
   /// This is the full-featured API to start DFU update, including support for Multi-Image uploads.
   ///
   /// [images] a list of images with the new firmware.
-  Future<void> update(List<Image> images,
-      {FirmwareUpgradeConfiguration configuration =
-          const FirmwareUpgradeConfiguration()});
+  Future<void> update(
+    List<Image> images, {
+    FirmwareUpgradeConfiguration configuration = const FirmwareUpgradeConfiguration(),
+  });
 
   /// Start update process.
   ///
@@ -109,6 +109,26 @@ abstract class FirmwareUpdateManager {
 
   /// Read current image list from the device.
   Future<List<ImageSlot>?> readImageList();
+
+  /// Confirm the image with the given [hash] on the device.
+  ///
+  /// Use this after a `testOnly` upgrade to permanently mark the running image
+  /// as confirmed. The [hash] should match the active, unconfirmed image
+  /// obtained from [readImageList].
+  ///
+  /// If the image is not confirmed before the next reboot, the bootloader will
+  /// revert to the previous firmware.
+  Future<void> confirmImage(Uint8List hash);
+  
+  /// Erase an image slot on the device.
+  ///
+  /// When [channel] is omitted, the device erases its default secondary image
+  /// slot. When [channel] is provided, the command targets that raw image slot
+  /// channel.
+  ///
+  /// The command fails on the device if the target slot contains a confirmed
+  /// image, an image pending test on next reboot, or an active split-image slot.
+  Future<void> erase([int? channel]);
 }
 
 abstract class FirmwareUpdateLogger {
@@ -133,6 +153,9 @@ abstract class UpdateManagerFactory {
 class FirmwareUpdateManagerFactory extends UpdateManagerFactory {
   @override
   Future<FirmwareUpdateManager> getUpdateManager(String deviceId) async {
+    if (kIsWeb) {
+      return WebUpdateManager(deviceId);
+    }
     return await DeviceUpdateManager.getInstance(deviceId);
   }
 }

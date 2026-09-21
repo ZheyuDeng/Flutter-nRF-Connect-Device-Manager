@@ -14,6 +14,7 @@ public class SwiftMcumgrFlutterPlugin: NSObject, FlutterPlugin {
     static let namespace = "mcumgr_flutter"
 
     private var updateManagers: [String: UpdateManager] = [:]
+    private var settingsManager: SettingsManager?
 
     // Lazy initialization to avoid triggering Bluetooth permission at app startup
     private var _centralManager: CBCentralManager?
@@ -128,6 +129,21 @@ public class SwiftMcumgrFlutterPlugin: NSObject, FlutterPlugin {
                 result(nil)
             case .readImageList:
                 try readImages(call: call, result: result)
+            case .confirmImage:
+                try confirmImage(call: call, result: result)
+            case .erase:
+                try erase(call: call, result: result)
+            case .initSettings:
+                try initSettingsManager(call: call, result: result)
+            case .fetchSettings:
+                try fetchSettings(result: result)
+            case .readSetting:
+                try readSetting(call: call, result: result)
+            case .writeSetting:
+                try writeSetting(call: call, result: result)
+            case .disposeSettings:
+                settingsManager = nil
+                result(nil)
             }
         } catch let e as FlutterError {
             result(e)
@@ -141,6 +157,10 @@ public class SwiftMcumgrFlutterPlugin: NSObject, FlutterPlugin {
             throw FlutterError(code: ErrorCode.wrongArguments.rawValue, message: "Can not create UUID from provided arguments", details: call.debugDetails)
         }
 
+        waitForBluetooth(call: call, result: result)
+    }
+
+    private func waitForBluetooth(call: FlutterMethodCall, result: @escaping FlutterResult) {
         let manager = centralManager
         bluetoothReadyGate.update(manager.state)
         bluetoothReadyGate.wait(ready: {
@@ -294,6 +314,61 @@ public class SwiftMcumgrFlutterPlugin: NSObject, FlutterPlugin {
             }
         }
     }
+
+    /// Confirms the image with the hash given in the call's arguments.
+    private func confirmImage(call: FlutterMethodCall, result: @escaping FlutterResult) throws {
+        guard let args = call.arguments as? [String: Any],
+              let uuid = args["deviceId"] as? String else {
+            throw FlutterError(code: ErrorCode.wrongArguments.rawValue, message: "Expected map arguments with deviceId and hash", details: call.debugDetails)
+        }
+
+        guard let hashData = (args["hash"] as? FlutterStandardTypedData)?.data else {
+            throw FlutterError(code: ErrorCode.wrongArguments.rawValue, message: "Image hash expected", details: call.debugDetails)
+        }
+
+        guard let manager = updateManagers[uuid] else {
+            throw FlutterError(code: ErrorCode.updateManagerDoesNotExist.rawValue, message: "Update manager does not exist", details: call.debugDetails)
+        }
+
+        let hash: [UInt8] = [UInt8](hashData)
+        manager.imageManager.confirm(hash: hash) { response, error in
+            if let error {
+                result(FlutterError(error: error, call: call))
+                return
+            }
+
+            result(nil)
+        }
+    }
+  
+    /// Erases the default secondary image slot or a specific raw image slot channel.
+    private func erase(call: FlutterMethodCall, result: @escaping FlutterResult) throws {
+        guard let args = call.arguments as? [String: Any],
+              let uuid = args["deviceUuid"] as? String else {
+            throw FlutterError(code: ErrorCode.wrongArguments.rawValue, message: "Can not parse erase arguments", details: call.debugDetails)
+        }
+
+        let channelValue = args["channel"]
+        let channel = (channelValue as? Int) ?? (channelValue as? NSNumber)?.intValue
+        if let channel, channel < 0 {
+            throw FlutterError(code: ErrorCode.wrongArguments.rawValue, message: "Channel must not be negative", details: call.debugDetails)
+        }
+
+        guard let manager = updateManagers[uuid] else {
+            throw FlutterError(code: ErrorCode.updateManagerDoesNotExist.rawValue, message: "Update manager does not exist", details: call.debugDetails)
+        }
+
+        let image = channel.map { $0 / 2 }
+        let slot = channel.map { $0 % 2 }
+        manager.imageManager.erase(image: image, slot: slot) { _, error in
+            if let error {
+                result(FlutterError(error: error, call: call))
+                return
+            }
+
+            result(nil)
+        }
+    }
 }
 
 extension SwiftMcumgrFlutterPlugin: CBCentralManagerDelegate {
@@ -301,16 +376,40 @@ extension SwiftMcumgrFlutterPlugin: CBCentralManagerDelegate {
         bluetoothReadyGate.update(central.state)
     }
 
-    private func handlePostponedCall(call: FlutterMethodCall, result: FlutterResult, central: CBCentralManager) {
-        guard let uuidString = call.arguments as? String, let uuid = UUID(uuidString: uuidString) else {
+    private func handlePostponedCall(call: FlutterMethodCall, result: @escaping FlutterResult, central: CBCentralManager) {
+        var uuidString = call.arguments as? String
+
+        if uuidString == nil {
+            if let args = call.arguments as? [String: Any], let addressString = args["deviceAddress"] as? String {
+                uuidString = addressString
+            }
+        }
+
+        guard let uuidString = uuidString, let uuid = UUID(uuidString: uuidString) else {
             let error = FlutterError(code: ErrorCode.wrongArguments.rawValue, message: "Can not create UUID from provided arguments", details: call.debugDetails)
             result(error)
             return
         }
         if let peripheral = central.retrievePeripherals(withIdentifiers: [uuid]).first {
             do {
-                try handleUpdateManager(for: peripheral, call: call)
-                result(nil)
+                if let method = FlutterMethod(rawValue: call.method), method == .initSettings {
+                    let transport = try handleSettingsManager(for: peripheral, call: call)
+                    transport.connect { connectionResult in
+                        switch connectionResult {
+                        case .connected:
+                            result(nil)
+                        case .deferred:
+                            result(nil)
+                        case .failed(let error):
+                            result(FlutterError(code: Self.settingsManagerErrorCode,
+                                                message: "Failed to connect: \(error.localizedDescription)",
+                                                details: nil))
+                        }
+                    }
+                } else {
+                    try handleUpdateManager(for: peripheral, call: call)
+                    result(nil)
+                }
             } catch {
                 result(error)
             }
@@ -318,5 +417,99 @@ extension SwiftMcumgrFlutterPlugin: CBCentralManagerDelegate {
             let error = FlutterError(code: ErrorCode.wrongArguments.rawValue, message: "Can not retreive peripheral to update", details: call.debugDetails)
             result(error)
         }
+    }
+
+    // MARK: - Settings Manager Methods
+
+    private static let settingsManagerErrorCode = "MCU_MGR_SETTINGS_MANAGER"
+
+    private func initSettingsManager(call: FlutterMethodCall, result: @escaping FlutterResult) throws {
+        guard let args = call.arguments as? [String: Any] else {
+            throw FlutterError(code: Self.settingsManagerErrorCode,
+                               message: "Expected map with deviceAddress, padTo4Bytes, and encodeValueToCBOR",
+                               details: nil)
+        }
+
+        guard let addressString = args["deviceAddress"] as? String,
+              UUID(uuidString: addressString) != nil else {
+            throw FlutterError(code: Self.settingsManagerErrorCode,
+                               message: "Device address expected in map",
+                               details: nil)
+        }
+
+        // Settings and DFU share one readiness gate, including its timeout
+        // and permission failures. Never leave Settings in the removed queue.
+        waitForBluetooth(call: call, result: result)
+    }
+
+    private func handleSettingsManager(for peripheral: CBPeripheral, call: FlutterMethodCall) throws -> McuMgrBleTransport {
+        guard case .none = settingsManager else {
+            throw FlutterError(code: ErrorCode.updateManagerExists.rawValue, message: "Settings manager for provided peripheral already exists", details: call.debugDetails)
+        }
+
+        guard let args = call.arguments as? [String: Any] else {
+            throw FlutterError(code: Self.settingsManagerErrorCode,
+                               message: "Expected map with deviceAddress, padTo4Bytes, and encodeValueToCBOR",
+                               details: nil)
+        }
+
+        let padTo4Bytes = args["padTo4Bytes"] as? Bool ?? false
+        let encodeValueToCBOR = args["encodeValueToCBOR"] as? Bool ?? false
+        let useByteStringEncoding = args["useByteStringEncoding"] as? Bool ?? true
+        let precisionMode = args["precisionMode"] as? String ?? "auto"
+
+        let transport = McuMgrBleTransport(peripheral)
+        settingsManager = SettingsManager(transport: transport,
+                                          padTo4Bytes: padTo4Bytes,
+                                          encodeValueToCBOR: encodeValueToCBOR,
+                                          useByteStringEncoding: useByteStringEncoding,
+                                          precisionMode: precisionMode,
+                                          logStreamHandler: logStreamHandler)
+
+        return transport
+    }
+
+    private func fetchSettings(result: @escaping FlutterResult) throws {
+        guard let settingsManager = settingsManager else {
+            throw FlutterError(code: Self.settingsManagerErrorCode,
+                               message: "Settings manager is not initialized",
+                               details: nil)
+        }
+
+        settingsManager.fetchSettings(result: result)
+    }
+
+    private func readSetting(call: FlutterMethodCall, result: @escaping FlutterResult) throws {
+        guard let settingsManager = settingsManager else {
+            throw FlutterError(code: Self.settingsManagerErrorCode,
+                               message: "Settings manager is not initialized",
+                               details: nil)
+        }
+
+        guard let key = call.arguments as? String else {
+            throw FlutterError(code: Self.settingsManagerErrorCode,
+                               message: "Expected key",
+                               details: nil)
+        }
+
+        settingsManager.readSettings(key: key, result: result)
+    }
+
+    private func writeSetting(call: FlutterMethodCall, result: @escaping FlutterResult) throws {
+        guard let settingsManager = settingsManager else {
+            throw FlutterError(code: Self.settingsManagerErrorCode,
+                               message: "Settings manager is not initialized",
+                               details: nil)
+        }
+
+        guard let args = call.arguments as? [String: Any],
+              let key = args["key"] as? String,
+              let value = args["value"] else {
+            throw FlutterError(code: Self.settingsManagerErrorCode,
+                               message: "Expected key-value map",
+                               details: nil)
+        }
+
+        settingsManager.writeSetting(key: key, value: value, result: result)
     }
 }

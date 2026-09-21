@@ -1,5 +1,17 @@
+## 0.9.1
+- Protobuf downgraded to 3.25.4 to fix collision with Firebase.
+
+## 0.9.0
+- Added `confirmImage(hash)` method for manual firmware confirmation after `testOnly` mode
+- Added Settings Manager support:
+  - New `McumgrSettings` class for reading and writing device configuration settings
+  - Support for CBOR encoding and 4-byte padding options
+  - Methods to read all settings, read specific settings, and write settings
+  - Full support for different data types (string, numeric, boolean)
+- Added Custom Group Manager support:
+
 ## 0.8.1
-- Unused dependency to `tuple` removed 
+- Unused dependency to `tuple` removed
 
 ## 0.8.0
 - Added support for MacOS (#114)
@@ -29,7 +41,7 @@
 
 ## 0.4.0
 - Read image list (#66):
-  - Added method to read image list. Based on [Android](https://github.com/NordicSemiconductor/Android-nRF-Connect-Device-Manager/blob/cc947d4fe003b5facd8fd03cb005197774bb3e89/mcumgr-core/src/main/java/io/runtime/mcumgr/managers/ImageManager.java#L228) and [iOS](https://github.com/NordicSemiconductor/IOS-nRF-Connect-Device-Manager/blob/d46c9ff85c87e786e8550fc3f4d633b1bc5c67be/Source/Managers/ImageManager.swift#L81) implementations.
+  - Added method to read image list. Based on [Android](https://github.com/nordicsemi/Android-nRF-Connect-Device-Manager/blob/cc947d4fe003b5facd8fd03cb005197774bb3e89/mcumgr-core/src/main/java/io/runtime/mcumgr/managers/ImageManager.java#L228) and [iOS](https://github.com/nordicsemi/IOS-nRF-Connect-Device-Manager/blob/d46c9ff85c87e786e8550fc3f4d633b1bc5c67be/Source/Managers/ImageManager.swift#L81) implementations.
 
 ## 0.3.3
 Feature/config for single image update (#61)

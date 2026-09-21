@@ -139,8 +139,10 @@ class DeviceUpdateManager extends FirmwareUpdateManager {
         .map((event) => ProtoProgressUpdateStreamArg.fromBuffer(event))
         .where((event) => event.uuid == _deviceId)
         .where((event) => event.hasProgressUpdate())
-        .listen((event) =>
-            _progressStreamController.add(event.progressUpdate.convert()));
+        .listen((event) {
+      if (_progressStreamController.isClosed) return;
+      _progressStreamController.add(event.progressUpdate.convert());
+    });
   }
 
   void _setupUpdateStateStream() {
@@ -149,13 +151,20 @@ class DeviceUpdateManager extends FirmwareUpdateManager {
         .map((event) => ProtoUpdateStateChangesStreamArg.fromBuffer(event))
         .where((event) => event.uuid == _deviceId)
         .listen((data) async {
+      // Native side may emit late events after kill() has closed the
+      // controllers (e.g. when the user cancels mid-upload or the BLE
+      // adapter is turned off). Guard every controller mutation so we
+      // don't throw "Cannot add new events after calling close".
+      final stateController = _updateStateStreamController;
+      if (stateController == null || stateController.isClosed) return;
+
       if (data.hasError()) {
-        _updateStateStreamController!.addError(data.error.localizedDescription);
+        stateController.addError(data.error.localizedDescription);
         return;
       }
 
       if (data.done) {
-        _updateStateStreamController!.close();
+        await stateController.close();
         return;
       }
 
@@ -165,16 +174,19 @@ class DeviceUpdateManager extends FirmwareUpdateManager {
 
       final stateChanges = data.updateStateChanges;
       if (stateChanges.canceled) {
-        await _updateStateStreamController!.close();
+        await stateController.close();
         return;
       }
 
       var d = stateChanges.newState.convert();
 
-      _updateStateStreamController!.add(d);
+      stateController.add(d);
 
       if (d == FirmwareUpgradeState.upload) {
-        _updateInProgressStreamController!.add(true);
+        final inProgressController = _updateInProgressStreamController;
+        if (inProgressController != null && !inProgressController.isClosed) {
+          inProgressController.add(true);
+        }
       }
     });
   }
@@ -209,5 +221,27 @@ class DeviceUpdateManager extends FirmwareUpdateManager {
     } else {
       return null;
     }
+  }
+
+  @override
+  Future<void> confirmImage(Uint8List hash) async {
+    await methodChannel.invokeMethod(
+        UpdateManagerMethod.confirmImage.rawValue,
+        <String, dynamic>{
+          'deviceId': _deviceId,
+          'hash': hash,
+        });
+  }
+  
+  @override
+  Future<void> erase([int? channel]) async {
+    if (channel != null && channel < 0) {
+      throw ArgumentError.value(channel, 'channel', 'must not be negative');
+    }
+
+    await methodChannel.invokeMethod(UpdateManagerMethod.erase.rawValue, {
+      'deviceUuid': _deviceId,
+      'channel': channel,
+    });
   }
 }

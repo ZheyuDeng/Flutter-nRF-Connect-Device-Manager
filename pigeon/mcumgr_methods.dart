@@ -1,16 +1,15 @@
 import 'package:pigeon/pigeon.dart';
 
-@ConfigurePigeon(PigeonOptions(
-  dartOut: 'lib/src/messages.g.dart',
-  dartOptions: DartOptions(),
-  kotlinOut: 'android/src/main/kotlin/no/nordicsemi/android/mcumgr_flutter/Messages.g.kt',
-  kotlinOptions: KotlinOptions(
-      package: "no.nordicsemi.android.mcumgr_flutter"
+@ConfigurePigeon(
+  PigeonOptions(
+    dartOut: 'lib/src/messages.g.dart',
+    dartOptions: DartOptions(),
+    kotlinOut: 'android/src/main/kotlin/no/nordicsemi/android/mcumgr_flutter/Messages.g.kt',
+    kotlinOptions: KotlinOptions(package: "no.nordicsemi.android.mcumgr_flutter"),
+    swiftOut: 'darwin/Classes/Messages.g.swift',
+    swiftOptions: SwiftOptions(),
   ),
-  swiftOut: 'ios/Classes/Messages.g.swift',
-  swiftOptions: SwiftOptions(),
-))
-
+)
 /// Generic class that matches all possible events from the native DownloadCallback interface.
 sealed class DownloadCallbackEvent {}
 
@@ -20,7 +19,13 @@ class OnDownloadProgressChangedEvent extends DownloadCallbackEvent {
   final int timestamp;
   final String remoteId;
   final String path;
-  OnDownloadProgressChangedEvent({required this.current, required this.total, required this.timestamp, required this.remoteId, required this.path});
+  OnDownloadProgressChangedEvent({
+    required this.current,
+    required this.total,
+    required this.timestamp,
+    required this.remoteId,
+    required this.path,
+  });
 }
 
 class OnDownloadFailedEvent extends DownloadCallbackEvent {
@@ -32,6 +37,7 @@ class OnDownloadFailedEvent extends DownloadCallbackEvent {
 
 class OnDownloadCancelledEvent extends DownloadCallbackEvent {
   final String remoteId;
+
   /// Needed to track the event source coming through a single stream.
   final String path;
 
@@ -40,19 +46,68 @@ class OnDownloadCancelledEvent extends DownloadCallbackEvent {
 
 class OnDownloadCompletedEvent extends DownloadCallbackEvent {
   final String remoteId;
+
   /// Needed to track the event source coming through a single stream.
   final String path;
+
   /// The raw bytes of the file.
   final Uint8List bytes;
 
   OnDownloadCompletedEvent(this.bytes, {required this.remoteId, required this.path});
 }
 
-@EventChannelApi()
-abstract class FsManagerEvents {
-  /// Get a stream of all file download events.
-  DownloadCallbackEvent getFileDownloadEvents();
+class ConnectionStateEvent {
+  final String remoteId;
+  final bool connected;
+  ConnectionStateEvent({required this.remoteId, required this.connected});
 }
+
+@EventChannelApi()
+abstract class McumgrFlutterEvents {
+  DownloadCallbackEvent getFileDownloadEvents();
+  ConnectionStateEvent getConnectionStateEvents();
+}
+
+// ---------------------------------------------------------------------------
+// Custom Group Manager — generic SMP transport decorator + group handler
+// ---------------------------------------------------------------------------
+
+@HostApi()
+abstract class CustomGroupManagerApi {
+  /// Configures the SMP transport decorator for a specific device.
+  ///
+  /// [suffix] bytes are appended to every outgoing SMP packet.
+  /// [opOverride] overrides byte 0 (op) of the SMP header.
+  /// [flagsOverride] overrides byte 1 (flags) of the SMP header.
+  /// All parameters are optional; omit to leave the field unmodified.
+  void setupDecorator(
+    String remoteId,
+    Uint8List? suffix,
+    int? opOverride,
+    int? flagsOverride,
+  );
+
+  /// Sends a custom SMP command and returns the raw response payload
+  /// (the 8-byte SMP header is stripped before returning).
+  ///
+  /// [groupId]   – SMP group ID (e.g. `0x41` for a vendor-specific group).
+  /// [commandId] – command within the group.
+  /// [op]        – SMP operation code (`0` = read, `2` = write).
+  /// [payload]   – string-keyed map CBOR-encoded as the request payload.
+  @async
+  Uint8List sendCustomCommand(
+    String remoteId,
+    int groupId,
+    int commandId,
+    int op,
+    Map<String?, Object?> payload,
+  );
+
+  /// Releases all native resources for the given device.
+  void kill(String remoteId);
+}
+
+// ---------------------------------------------------------------------------
 
 @HostApi()
 abstract class FsManagerApi {

@@ -8,14 +8,11 @@ PODS:
   - iOSMcuManagerLibrary (1.12):
     - SwiftCBOR (= 0.5.0)
     - ZIPFoundation (= 0.9.19)
-  - mcumgr_flutter (0.7.1):
+  - mcumgr_flutter (0.9.0):
     - Flutter
     - FlutterMacOS
     - iOSMcuManagerLibrary (= 1.12)
     - SwiftProtobuf
-  - path_provider_foundation (0.0.1):
-    - Flutter
-    - FlutterMacOS
   - SwiftCBOR (0.5.0)
   - SwiftProtobuf (1.33.3)
   - ZIPFoundation (0.9.19)
@@ -25,7 +22,6 @@ DEPENDENCIES:
   - flutter_blue_plus_darwin (from `Flutter/ephemeral/.symlinks/plugins/flutter_blue_plus_darwin/darwin`)
   - FlutterMacOS (from `Flutter/ephemeral`)
   - mcumgr_flutter (from `Flutter/ephemeral/.symlinks/plugins/mcumgr_flutter/darwin`)
-  - path_provider_foundation (from `Flutter/ephemeral/.symlinks/plugins/path_provider_foundation/darwin`)
 
 SPEC REPOS:
   trunk:
@@ -43,16 +39,13 @@ EXTERNAL SOURCES:
     :path: Flutter/ephemeral
   mcumgr_flutter:
     :path: Flutter/ephemeral/.symlinks/plugins/mcumgr_flutter/darwin
-  path_provider_foundation:
-    :path: Flutter/ephemeral/.symlinks/plugins/path_provider_foundation/darwin
 
 SPEC CHECKSUMS:
   file_picker: e716a70a9fe5fd9e09ebc922d7541464289443af
   flutter_blue_plus_darwin: 904ed52825285a15f60e9d90312337a09f11a785
   FlutterMacOS: d0db08ddef1a9af05a5ec4b724367152bb0500b1
   iOSMcuManagerLibrary: f72db849f6dd66b1f26cd7eea776050a22c8591c
-  mcumgr_flutter: 9d69d9002f3a5fe593f1c79370183a57968565e7
-  path_provider_foundation: 0b743cbb62d8e47eab856f09262bb8c1ddcfe6ba
+  mcumgr_flutter: 2e2b1db812f437a451cddb8ec028278232f0e21a
   SwiftCBOR: aa87349b4ccddd19f861aa544f7c27d43dee5772
   SwiftProtobuf: e1b437c8e31a4c5577b643249a0bb62ed4f02153
   ZIPFoundation: b8c29ea7ae353b309bc810586181fd073cb3312c

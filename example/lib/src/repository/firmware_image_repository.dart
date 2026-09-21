@@ -6,7 +6,7 @@ import 'package:mcumgr_flutter_example/src/model/firmware_image.dart';
 
 class FirmwareImageRepository {
   static const String baseUrl =
-      'https://nordicsemiconductor.github.io/nrfprogrammer-firmware-images/';
+      'https://nordicsemi.github.io/nrfprogrammer-firmware-images/';
   String get url => '$baseUrl/manifest.json';
 
   Future<ApplicationResponse> getFirmwareImages() async {

@@ -1,17 +1,19 @@
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+
 group 'no.nordicsemi.android.mcumgr_flutter'
 version '1.0-SNAPSHOT'
 
 buildscript {
-    ext.kotlin_version = '2.2.20'
+    ext.kotlin_version = '2.3.21'
     repositories {
         google()
         mavenCentral()
     }
 
     dependencies {
-        classpath 'com.android.tools.build:gradle:8.13.0'
+        classpath 'com.android.tools.build:gradle:8.13.2'
         classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
-        classpath 'com.squareup.wire:wire-gradle-plugin:4.9.3'
+        classpath 'com.squareup.wire:wire-gradle-plugin:5.5.1'
     }
 }
 
@@ -27,26 +29,27 @@ apply plugin: 'kotlin-android'
 apply plugin: 'com.squareup.wire'
 
 android {
-    namespace 'no.nordicsemi.android.mcumgr_flutter'
-    compileSdk 36
+    namespace = 'no.nordicsemi.android.mcumgr_flutter'
+    compileSdk = 36
 
     sourceSets {
         main.java.srcDirs += 'src/main/kotlin'
     }
     defaultConfig {
-        minSdk 19
-        targetSdk 36
+        minSdk = 21
+        targetSdk = 36
     }
     lintOptions {
         disable 'InvalidPackage'
     }
-
     compileOptions {
-        sourceCompatibility JavaVersion.VERSION_11
-        targetCompatibility JavaVersion.VERSION_11
+        sourceCompatibility = JavaVersion.VERSION_21
+        targetCompatibility = JavaVersion.VERSION_21
     }
-    kotlinOptions {
-        jvmTarget = '11'
+    kotlin {
+        compilerOptions {
+            jvmTarget = JvmTarget.JVM_21
+        }
     }
 }
 
@@ -59,5 +62,12 @@ wire {
 
 dependencies {
     implementation 'no.nordicsemi.android:mcumgr-ble:2.7.4'
-    implementation 'com.google.protobuf:protobuf-kotlin-lite:3.25.1'
+
+    // Keep protobuf-lite below 4.34 to avoid DescriptorProtos duplication with
+    // Firebase's protolite-well-known-types in host apps.
+    // See: https://github.com/nordicsemi/Flutter-nRF-Connect-Device-Manager/issues/152
+    implementation 'com.google.protobuf:protobuf-kotlin-lite:3.25.9'
+
+    implementation 'com.fasterxml.jackson.core:jackson-core:2.21.3'
+    implementation 'com.fasterxml.jackson.core:jackson-annotations:2.22'
 }
