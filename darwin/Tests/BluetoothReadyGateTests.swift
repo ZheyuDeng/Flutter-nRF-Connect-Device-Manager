@@ -15,9 +15,11 @@ struct BluetoothReadyGateTests {
             gate.update(initial)
             gate.wait(ready: { successes += 1 }, failed: { _ in failures += 1 })
             precondition(successes == 0 && failures == 0)
+            precondition(!gate.isIdle)
             gate.update(.poweredOn)
             spin()
             precondition(successes == 1 && failures == 0)
+            precondition(gate.isIdle)
         }
 
         // Timeout completes exactly once; a late poweredOn cannot start an old update.
@@ -26,8 +28,10 @@ struct BluetoothReadyGateTests {
         var failures: [CBManagerState] = []
         gate.update(.poweredOff)
         gate.wait(ready: { successes += 1 }, failed: { failures.append($0) })
+        precondition(!gate.isIdle)
         gate.update(.unknown) // State changes must not restart the timeout budget.
         spin()
+        precondition(gate.isIdle)
         gate.update(.poweredOn)
         precondition(successes == 0 && failures == [.unknown])
         gate.wait(ready: { successes += 1 }, failed: { failures.append($0) })

@@ -39,6 +39,7 @@ public class SwiftMcumgrFlutterPlugin: NSObject, FlutterPlugin {
         if _fsManagerPlugin == nil {
             _fsManagerPlugin = FsManagerPlugin(
                 centralManagerProvider: { [weak self] in self?.centralManager },
+                onManagerRemoved: { [weak self] in self?.releaseCentralIfIdle() },
                 messenger: binaryMessenger
             )
         }
@@ -148,6 +149,7 @@ public class SwiftMcumgrFlutterPlugin: NSObject, FlutterPlugin {
                 try writeSetting(call: call, result: result)
             case .disposeSettings:
                 settingsManager = nil
+                releaseCentralIfIdle()
                 result(nil)
             }
         } catch let e as FlutterError {
@@ -170,6 +172,7 @@ public class SwiftMcumgrFlutterPlugin: NSObject, FlutterPlugin {
         bluetoothReadyGate.update(manager.state)
         bluetoothReadyGate.wait(ready: {
             self.handlePostponedCall(call: call, result: result, central: manager)
+            self.releaseCentralIfIdle()
         }, failed: { [weak self] state in
             result(FlutterError(
                 // Typed so Dart can tell "Bluetooth cannot serve this" from a
@@ -178,6 +181,7 @@ public class SwiftMcumgrFlutterPlugin: NSObject, FlutterPlugin {
                 message: self?.bluetoothStateMessage(state) ?? "Bluetooth did not become ready",
                 details: ["method": call.method, "bluetoothState": state.rawValue]
             ))
+            self?.releaseCentralIfIdle()
         })
     }
 
@@ -214,7 +218,7 @@ public class SwiftMcumgrFlutterPlugin: NSObject, FlutterPlugin {
             guard !settled else { return }
             settled = true
             if let error {
-                self?.updateManagers.removeValue(forKey: uuidString)
+                self?.dropUpdateManager(uuidString)
                 result(error)
             } else {
                 result(nil)
@@ -222,11 +226,12 @@ public class SwiftMcumgrFlutterPlugin: NSObject, FlutterPlugin {
         }
         // A native SMP read cannot be cancelled, and Nordic's own connection
         // timeout is 20s. Bound what the user waits on independently of it.
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.transportWarmUpTimeout + 0.5) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.transportWarmUpTimeout + 0.5) { [weak central] in
             finish(FlutterError(
                 code: ErrorCode.bluetoothUnavailable.rawValue,
                 message: "DFU transport did not become ready in time",
-                details: ["method": call.method, "bluetoothState": central.state.rawValue]
+                details: ["method": call.method,
+                          "bluetoothState": central?.state.rawValue ?? CBManagerState.unknown.rawValue]
             ))
         }
         attemptTransportWarmUp(
@@ -248,9 +253,10 @@ public class SwiftMcumgrFlutterPlugin: NSObject, FlutterPlugin {
         finish: @escaping (FlutterError?) -> Void
     ) {
         guard let manager = updateManagers[uuidString] else { return }
-        manager.imageManager.list { [weak self] _, error in
-            DispatchQueue.main.async {
-                guard let self else { return }
+        manager.imageManager.list { [weak self, weak central, weak manager] _, error in
+            DispatchQueue.main.async { [weak self, weak central, weak manager] in
+                guard let self, let central, let manager,
+                      self.updateManagers[uuidString] === manager else { return }
                 guard let error else {
                     finish(nil)
                     return
@@ -282,7 +288,9 @@ public class SwiftMcumgrFlutterPlugin: NSObject, FlutterPlugin {
                     ))
                     return
                 }
-                DispatchQueue.main.asyncAfter(deadline: .now() + Self.transportWarmUpRetryDelay) {
+                DispatchQueue.main.asyncAfter(deadline: .now() + Self.transportWarmUpRetryDelay) { [weak self, weak central, weak manager] in
+                    guard let self, let central, let manager,
+                          self.updateManagers[uuidString] === manager else { return }
                     self.attemptTransportWarmUp(
                         uuidString: uuidString,
                         call: call,
@@ -403,7 +411,24 @@ public class SwiftMcumgrFlutterPlugin: NSObject, FlutterPlugin {
 
     private func kill(call: FlutterMethodCall) throws {
         let uuid = try retrieveManager(call: call).peripheral.identifier.uuidString
-        updateManagers.removeValue(forKey: uuid)
+        dropUpdateManager(uuid)
+    }
+
+    /// Close the transport's own central with the manager, like `FsManagerPlugin.kill`.
+    private func dropUpdateManager(_ uuid: String) {
+        updateManagers.removeValue(forKey: uuid)?.transport.close()
+        releaseCentralIfIdle()
+    }
+
+    /// A live global-permission CBManager makes AccessorySetupKit refuse its
+    /// picker (ASErrorDomain 550), so do not keep this central between updates.
+    /// The lazy getter recreates it, and the ready gate re-reads its state.
+    private func releaseCentralIfIdle() {
+        guard updateManagers.isEmpty, settingsManager == nil,
+              _fsManagerPlugin?.isIdle ?? true,
+              bluetoothReadyGate.isIdle else { return }
+        _centralManager?.delegate = nil
+        _centralManager = nil
     }
 
     // MARK: Logs
