@@ -39,6 +39,7 @@ public class SwiftMcumgrFlutterPlugin: NSObject, FlutterPlugin {
         if _fsManagerPlugin == nil {
             _fsManagerPlugin = FsManagerPlugin(
                 centralManagerProvider: { [weak self] in self?.centralManager },
+                onManagerRemoved: { [weak self] in self?.releaseCentralIfIdle() },
                 messenger: binaryMessenger
             )
         }

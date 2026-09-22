@@ -12,15 +12,18 @@ class FsManagerPlugin : FsManagerApi {
     private var managers: [String : FileSystemManager] = [:]
     private var delegates: [String : FileDownloadDelegate] = [:]
     private let centralManagerProvider: () -> CBCentralManager?
+    private let onManagerRemoved: () -> Void
     private let streamHandler = DownloadStreamHandler()
 
     var isIdle: Bool { managers.isEmpty }
 
     init(
         centralManagerProvider: @escaping () -> CBCentralManager?,
+        onManagerRemoved: @escaping () -> Void,
         messenger: FlutterBinaryMessenger
     ) {
         self.centralManagerProvider = centralManagerProvider
+        self.onManagerRemoved = onManagerRemoved
         
         FsManagerApiSetup.setUp(binaryMessenger: messenger, api: self)
         GetFileDownloadEventsStreamHandler.register(with: messenger, streamHandler: streamHandler)
@@ -97,6 +100,7 @@ class FsManagerPlugin : FsManagerApi {
     /// Kill the FsManager instance on the native platform.
     func kill(remoteId: String) throws {
         managers.removeValue(forKey: remoteId)?.transport.close()
+        onManagerRemoved()
     }
 }
 
