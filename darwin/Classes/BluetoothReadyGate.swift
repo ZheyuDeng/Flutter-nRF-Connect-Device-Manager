@@ -14,6 +14,8 @@ final class BluetoothReadyGate {
     private var state: CBManagerState = .unknown
     private var pending: [UUID: Request] = [:]
 
+    var isIdle: Bool { pending.isEmpty }
+
     init(timeout: TimeInterval = 5) {
         self.timeout = timeout
     }
