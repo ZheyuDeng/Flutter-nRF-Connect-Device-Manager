@@ -148,6 +148,7 @@ public class SwiftMcumgrFlutterPlugin: NSObject, FlutterPlugin {
                 try writeSetting(call: call, result: result)
             case .disposeSettings:
                 settingsManager = nil
+                releaseCentralIfIdle()
                 result(nil)
             }
         } catch let e as FlutterError {
@@ -214,7 +215,7 @@ public class SwiftMcumgrFlutterPlugin: NSObject, FlutterPlugin {
             guard !settled else { return }
             settled = true
             if let error {
-                self?.updateManagers.removeValue(forKey: uuidString)
+                self?.dropUpdateManager(uuidString)
                 result(error)
             } else {
                 result(nil)
@@ -403,7 +404,23 @@ public class SwiftMcumgrFlutterPlugin: NSObject, FlutterPlugin {
 
     private func kill(call: FlutterMethodCall) throws {
         let uuid = try retrieveManager(call: call).peripheral.identifier.uuidString
-        updateManagers.removeValue(forKey: uuid)
+        dropUpdateManager(uuid)
+    }
+
+    /// Close the transport's own central with the manager, like `FsManagerPlugin.kill`.
+    private func dropUpdateManager(_ uuid: String) {
+        updateManagers.removeValue(forKey: uuid)?.transport.close()
+        releaseCentralIfIdle()
+    }
+
+    /// A live global-permission CBManager makes AccessorySetupKit refuse its
+    /// picker (ASErrorDomain 550), so do not keep this central between updates.
+    /// The lazy getter recreates it, and the ready gate re-reads its state.
+    private func releaseCentralIfIdle() {
+        guard updateManagers.isEmpty, settingsManager == nil,
+              _fsManagerPlugin?.isIdle ?? true else { return }
+        _centralManager?.delegate = nil
+        _centralManager = nil
     }
 
     // MARK: Logs

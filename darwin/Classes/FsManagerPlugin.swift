@@ -14,6 +14,8 @@ class FsManagerPlugin : FsManagerApi {
     private let centralManagerProvider: () -> CBCentralManager?
     private let streamHandler = DownloadStreamHandler()
 
+    var isIdle: Bool { managers.isEmpty }
+
     init(
         centralManagerProvider: @escaping () -> CBCentralManager?,
         messenger: FlutterBinaryMessenger
