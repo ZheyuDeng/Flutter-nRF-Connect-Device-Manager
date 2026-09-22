@@ -10,6 +10,11 @@ import iOSMcuManagerLibrary
 
 public class SwiftMcumgrFlutterPlugin: NSObject, FlutterPlugin {
     private let bluetoothReadyGate = BluetoothReadyGate()
+    /// Budget for the transport's own central to settle. Mirrors
+    /// `BluetoothReadyGate`'s 5s so both readiness steps fail in the same order
+    /// of magnitude.
+    private static let transportWarmUpTimeout: TimeInterval = 5
+    private static let transportWarmUpRetryDelay: TimeInterval = 0.25
 
     static let namespace = "mcumgr_flutter"
 
@@ -165,20 +170,152 @@ public class SwiftMcumgrFlutterPlugin: NSObject, FlutterPlugin {
         bluetoothReadyGate.update(manager.state)
         bluetoothReadyGate.wait(ready: {
             self.handlePostponedCall(call: call, result: result, central: manager)
-        }, failed: { state in
-            let message: String
-            switch state {
-            case .unauthorized: message = "Bluetooth is unauthorized"
-            case .unsupported: message = "Unsupported bluetooth state"
-            case .poweredOff: message = "Bluetooth is powered off"
-            default: message = "Bluetooth did not become ready within 5 seconds"
-            }
+        }, failed: { [weak self] state in
             result(FlutterError(
-                code: ErrorCode.wrongArguments.rawValue,
-                message: message,
+                // Typed so Dart can tell "Bluetooth cannot serve this" from a
+                // device-side transport failure instead of parsing messages.
+                code: ErrorCode.bluetoothUnavailable.rawValue,
+                message: self?.bluetoothStateMessage(state) ?? "Bluetooth did not become ready",
                 details: ["method": call.method, "bluetoothState": state.rawValue]
             ))
         })
+    }
+
+
+    // MARK: - Transport readiness
+
+    /// `bluetoothReadyGate` covers this plugin's own central. `McuMgrBleTransport`
+    /// builds a *second* `CBCentralManager` when the update manager is created
+    /// (`UpdateManager.init`), and its first `_send` reads that manager's state
+    /// synchronously — so a freshly created transport can answer
+    /// `centralManagerPoweredOff` while Bluetooth is perfectly healthy. Field
+    /// capture 2026-09-20: the very first update of an app session failed that
+    /// way and a manual retry succeeded.
+    ///
+    /// Warm the transport with one real SMP read before handing the manager to
+    /// Dart, and classify the outcome here, where the errors are still typed:
+    ///   * transport not ready while *our* central is poweredOn → warm-up race,
+    ///     retry within the budget;
+    ///   * our central not poweredOn → `bluetoothUnavailable`, no retry;
+    ///   * anything else (missing SMP service, connection timeout, …) →
+    ///     `transportUnavailable`, no retry.
+    /// Registration is rolled back on failure so the next attempt is not
+    /// rejected by the `updateManagerExists` guard.
+    private func warmUpTransport(
+        uuidString: String,
+        call: FlutterMethodCall,
+        central: CBCentralManager,
+        result: @escaping FlutterResult
+    ) {
+        let deadline = Date().addingTimeInterval(Self.transportWarmUpTimeout)
+        var settled = false
+        let finish: (FlutterError?) -> Void = { [weak self] error in
+            dispatchPrecondition(condition: .onQueue(.main))
+            guard !settled else { return }
+            settled = true
+            if let error {
+                self?.updateManagers.removeValue(forKey: uuidString)
+                result(error)
+            } else {
+                result(nil)
+            }
+        }
+        // A native SMP read cannot be cancelled, and Nordic's own connection
+        // timeout is 20s. Bound what the user waits on independently of it.
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.transportWarmUpTimeout + 0.5) {
+            finish(FlutterError(
+                code: ErrorCode.bluetoothUnavailable.rawValue,
+                message: "DFU transport did not become ready in time",
+                details: ["method": call.method, "bluetoothState": central.state.rawValue]
+            ))
+        }
+        attemptTransportWarmUp(
+            uuidString: uuidString,
+            call: call,
+            central: central,
+            deadline: deadline,
+            attempt: 1,
+            finish: finish
+        )
+    }
+
+    private func attemptTransportWarmUp(
+        uuidString: String,
+        call: FlutterMethodCall,
+        central: CBCentralManager,
+        deadline: Date,
+        attempt: Int,
+        finish: @escaping (FlutterError?) -> Void
+    ) {
+        guard let manager = updateManagers[uuidString] else { return }
+        manager.imageManager.list { [weak self] _, error in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                guard let error else {
+                    finish(nil)
+                    return
+                }
+                // A response is proof enough: an empty or absent image list is
+                // a valid answer from a device whose slots are not enumerable,
+                // and the upgrade itself never reads this list.
+                guard self.isTransportNotReady(error) else {
+                    finish(FlutterError(
+                        code: ErrorCode.transportUnavailable.rawValue,
+                        message: error.localizedDescription,
+                        details: ["method": call.method, "attempt": attempt]
+                    ))
+                    return
+                }
+                guard central.state == .poweredOn else {
+                    finish(FlutterError(
+                        code: ErrorCode.bluetoothUnavailable.rawValue,
+                        message: self.bluetoothStateMessage(central.state),
+                        details: ["method": call.method, "bluetoothState": central.state.rawValue]
+                    ))
+                    return
+                }
+                guard Date() < deadline else {
+                    finish(FlutterError(
+                        code: ErrorCode.bluetoothUnavailable.rawValue,
+                        message: "DFU transport did not become ready in time",
+                        details: ["method": call.method, "attempt": attempt]
+                    ))
+                    return
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + Self.transportWarmUpRetryDelay) {
+                    self.attemptTransportWarmUp(
+                        uuidString: uuidString,
+                        call: call,
+                        central: central,
+                        deadline: deadline,
+                        attempt: attempt + 1,
+                        finish: finish
+                    )
+                }
+            }
+        }
+    }
+
+    /// Only the transport's own "central is not usable yet" cases. Missing SMP
+    /// service, missing characteristic, connection timeouts and disconnects are
+    /// deliberately excluded: retrying those cannot help.
+    func isTransportNotReady(_ error: Error) -> Bool {
+        guard let error = error as? McuMgrBleTransportError else { return false }
+        switch error {
+        case .centralManagerPoweredOff, .centralManagerNotReady:
+            return true
+        default:
+            return false
+        }
+    }
+
+    func bluetoothStateMessage(_ state: CBManagerState) -> String {
+        switch state {
+        case .unauthorized: return "Bluetooth is unauthorized"
+        case .unsupported: return "Unsupported bluetooth state"
+        case .poweredOff: return "Bluetooth is powered off"
+        default: return "Bluetooth did not become ready"
+        }
     }
 
     private func handleUpdateManager(for peripheral: CBPeripheral, call: FlutterMethodCall) throws {
@@ -408,7 +545,14 @@ extension SwiftMcumgrFlutterPlugin: CBCentralManagerDelegate {
                     }
                 } else {
                     try handleUpdateManager(for: peripheral, call: call)
-                    result(nil)
+                    // Do not report success until the transport's own central
+                    // can actually carry an SMP request.
+                    warmUpTransport(
+                        uuidString: peripheral.identifier.uuidString,
+                        call: call,
+                        central: central,
+                        result: result
+                    )
                 }
             } catch {
                 result(error)
