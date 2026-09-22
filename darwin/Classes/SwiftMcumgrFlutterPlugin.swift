@@ -9,7 +9,12 @@ import CoreBluetooth
 import iOSMcuManagerLibrary
 
 public class SwiftMcumgrFlutterPlugin: NSObject, FlutterPlugin {
-    private var initManagerResultQueue = ConcurrentQueue<(call: FlutterMethodCall, result: FlutterResult)>()
+    private let bluetoothReadyGate = BluetoothReadyGate()
+    /// Budget for the transport's own central to settle. Mirrors
+    /// `BluetoothReadyGate`'s 5s so both readiness steps fail in the same order
+    /// of magnitude.
+    private static let transportWarmUpTimeout: TimeInterval = 5
+    private static let transportWarmUpRetryDelay: TimeInterval = 0.25
 
     static let namespace = "mcumgr_flutter"
 
@@ -20,8 +25,7 @@ public class SwiftMcumgrFlutterPlugin: NSObject, FlutterPlugin {
     private var _centralManager: CBCentralManager?
     private var centralManager: CBCentralManager {
         if _centralManager == nil {
-            _centralManager = CBCentralManager()
-            _centralManager?.delegate = self
+            _centralManager = CBCentralManager(delegate: self, queue: .main)
         }
         return _centralManager!
     }
@@ -154,24 +158,163 @@ public class SwiftMcumgrFlutterPlugin: NSObject, FlutterPlugin {
     }
 
     private func initializeUpdateManager(call: FlutterMethodCall, result: @escaping FlutterResult) throws {
-        guard let uuidString = call.arguments as? String, let uuid = UUID(uuidString: uuidString) else {
+        guard let uuidString = call.arguments as? String, UUID(uuidString: uuidString) != nil else {
             throw FlutterError(code: ErrorCode.wrongArguments.rawValue, message: "Can not create UUID from provided arguments", details: call.debugDetails)
         }
 
-        // Access centralManager (this will lazily create it if needed)
+        waitForBluetooth(call: call, result: result)
+    }
+
+    private func waitForBluetooth(call: FlutterMethodCall, result: @escaping FlutterResult) {
         let manager = centralManager
+        bluetoothReadyGate.update(manager.state)
+        bluetoothReadyGate.wait(ready: {
+            self.handlePostponedCall(call: call, result: result, central: manager)
+        }, failed: { [weak self] state in
+            result(FlutterError(
+                // Typed so Dart can tell "Bluetooth cannot serve this" from a
+                // device-side transport failure instead of parsing messages.
+                code: ErrorCode.bluetoothUnavailable.rawValue,
+                message: self?.bluetoothStateMessage(state) ?? "Bluetooth did not become ready",
+                details: ["method": call.method, "bluetoothState": state.rawValue]
+            ))
+        })
+    }
 
-        // Check if Bluetooth is ready
-        if manager.state == .poweredOn {
-            guard let peripheral = manager.retrievePeripherals(withIdentifiers: [uuid]).first else {
-                throw FlutterError(code: ErrorCode.wrongArguments.rawValue, message: "Can't retrieve peripheral with provided UUID", details: call.debugDetails)
+
+    // MARK: - Transport readiness
+
+    /// `bluetoothReadyGate` covers this plugin's own central. `McuMgrBleTransport`
+    /// builds a *second* `CBCentralManager` when the update manager is created
+    /// (`UpdateManager.init`), and its first `_send` reads that manager's state
+    /// synchronously — so a freshly created transport can answer
+    /// `centralManagerPoweredOff` while Bluetooth is perfectly healthy. Field
+    /// capture 2026-09-20: the very first update of an app session failed that
+    /// way and a manual retry succeeded.
+    ///
+    /// Warm the transport with one real SMP read before handing the manager to
+    /// Dart, and classify the outcome here, where the errors are still typed:
+    ///   * transport not ready while *our* central is poweredOn → warm-up race,
+    ///     retry within the budget;
+    ///   * our central not poweredOn → `bluetoothUnavailable`, no retry;
+    ///   * anything else (missing SMP service, connection timeout, …) →
+    ///     `transportUnavailable`, no retry.
+    /// Registration is rolled back on failure so the next attempt is not
+    /// rejected by the `updateManagerExists` guard.
+    private func warmUpTransport(
+        uuidString: String,
+        call: FlutterMethodCall,
+        central: CBCentralManager,
+        result: @escaping FlutterResult
+    ) {
+        let deadline = Date().addingTimeInterval(Self.transportWarmUpTimeout)
+        var settled = false
+        let finish: (FlutterError?) -> Void = { [weak self] error in
+            dispatchPrecondition(condition: .onQueue(.main))
+            guard !settled else { return }
+            settled = true
+            if let error {
+                self?.updateManagers.removeValue(forKey: uuidString)
+                result(error)
+            } else {
+                result(nil)
             }
+        }
+        // A native SMP read cannot be cancelled, and Nordic's own connection
+        // timeout is 20s. Bound what the user waits on independently of it.
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.transportWarmUpTimeout + 0.5) {
+            finish(FlutterError(
+                code: ErrorCode.bluetoothUnavailable.rawValue,
+                message: "DFU transport did not become ready in time",
+                details: ["method": call.method, "bluetoothState": central.state.rawValue]
+            ))
+        }
+        attemptTransportWarmUp(
+            uuidString: uuidString,
+            call: call,
+            central: central,
+            deadline: deadline,
+            attempt: 1,
+            finish: finish
+        )
+    }
 
-            try handleUpdateManager(for: peripheral, call: call)
-            result(nil)
-        } else {
-            // Bluetooth not ready yet, queue the request and wait for delegate callback
-            initManagerResultQueue.enqueue((call: call, result: result))
+    private func attemptTransportWarmUp(
+        uuidString: String,
+        call: FlutterMethodCall,
+        central: CBCentralManager,
+        deadline: Date,
+        attempt: Int,
+        finish: @escaping (FlutterError?) -> Void
+    ) {
+        guard let manager = updateManagers[uuidString] else { return }
+        manager.imageManager.list { [weak self] _, error in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                guard let error else {
+                    finish(nil)
+                    return
+                }
+                // A response is proof enough: an empty or absent image list is
+                // a valid answer from a device whose slots are not enumerable,
+                // and the upgrade itself never reads this list.
+                guard self.isTransportNotReady(error) else {
+                    finish(FlutterError(
+                        code: ErrorCode.transportUnavailable.rawValue,
+                        message: error.localizedDescription,
+                        details: ["method": call.method, "attempt": attempt]
+                    ))
+                    return
+                }
+                guard central.state == .poweredOn else {
+                    finish(FlutterError(
+                        code: ErrorCode.bluetoothUnavailable.rawValue,
+                        message: self.bluetoothStateMessage(central.state),
+                        details: ["method": call.method, "bluetoothState": central.state.rawValue]
+                    ))
+                    return
+                }
+                guard Date() < deadline else {
+                    finish(FlutterError(
+                        code: ErrorCode.bluetoothUnavailable.rawValue,
+                        message: "DFU transport did not become ready in time",
+                        details: ["method": call.method, "attempt": attempt]
+                    ))
+                    return
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + Self.transportWarmUpRetryDelay) {
+                    self.attemptTransportWarmUp(
+                        uuidString: uuidString,
+                        call: call,
+                        central: central,
+                        deadline: deadline,
+                        attempt: attempt + 1,
+                        finish: finish
+                    )
+                }
+            }
+        }
+    }
+
+    /// Only the transport's own "central is not usable yet" cases. Missing SMP
+    /// service, missing characteristic, connection timeouts and disconnects are
+    /// deliberately excluded: retrying those cannot help.
+    func isTransportNotReady(_ error: Error) -> Bool {
+        guard let error = error as? McuMgrBleTransportError else { return false }
+        switch error {
+        case .centralManagerPoweredOff, .centralManagerNotReady:
+            return true
+        default:
+            return false
+        }
+    }
+
+    func bluetoothStateMessage(_ state: CBManagerState) -> String {
+        switch state {
+        case .unauthorized: return "Bluetooth is unauthorized"
+        case .unsupported: return "Unsupported bluetooth state"
+        case .poweredOff: return "Bluetooth is powered off"
+        default: return "Bluetooth did not become ready"
         }
     }
 
@@ -367,30 +510,7 @@ public class SwiftMcumgrFlutterPlugin: NSObject, FlutterPlugin {
 
 extension SwiftMcumgrFlutterPlugin: CBCentralManagerDelegate {
     public func centralManagerDidUpdateState(_ central: CBCentralManager) {
-        switch central.state {
-        case .poweredOn:
-            while let managerRequest = initManagerResultQueue.dequeue() {
-                handlePostponedCall(call: managerRequest.call, result: managerRequest.result, central: central)
-            }
-            break
-        case .unsupported:
-            while let managerRequest = initManagerResultQueue.dequeue() {
-                let error = FlutterError(code: ErrorCode.wrongArguments.rawValue, message: "Unsupported bluetooth state", details: managerRequest.call.debugDetails)
-                managerRequest.result(error)
-            }
-        case .unauthorized:
-            while let managerRequest = initManagerResultQueue.dequeue() {
-                let error = FlutterError(code: ErrorCode.wrongArguments.rawValue, message: "Bluetooth is unauthorized", details: managerRequest.call.debugDetails)
-                managerRequest.result(error)
-            }
-        case .poweredOff:
-            while let managerRequest = initManagerResultQueue.dequeue() {
-                let error = FlutterError(code: ErrorCode.wrongArguments.rawValue, message: "Bluetooth is powered off", details: managerRequest.call.debugDetails)
-                managerRequest.result(error)
-            }
-        default:
-            break
-        }
+        bluetoothReadyGate.update(central.state)
     }
 
     private func handlePostponedCall(call: FlutterMethodCall, result: @escaping FlutterResult, central: CBCentralManager) {
@@ -425,7 +545,14 @@ extension SwiftMcumgrFlutterPlugin: CBCentralManagerDelegate {
                     }
                 } else {
                     try handleUpdateManager(for: peripheral, call: call)
-                    result(nil)
+                    // Do not report success until the transport's own central
+                    // can actually carry an SMP request.
+                    warmUpTransport(
+                        uuidString: peripheral.identifier.uuidString,
+                        call: call,
+                        central: central,
+                        result: result
+                    )
                 }
             } catch {
                 result(error)
@@ -448,39 +575,15 @@ extension SwiftMcumgrFlutterPlugin: CBCentralManagerDelegate {
         }
 
         guard let addressString = args["deviceAddress"] as? String,
-              let uuid = UUID(uuidString: addressString) else {
+              UUID(uuidString: addressString) != nil else {
             throw FlutterError(code: Self.settingsManagerErrorCode,
                                message: "Device address expected in map",
                                details: nil)
         }
 
-        // Access centralManager (this will lazily create it if needed)
-        let manager = centralManager
-
-        // Check if Bluetooth is ready
-        if manager.state == .poweredOn {
-            guard let peripheral = manager.retrievePeripherals(withIdentifiers: [uuid]).first else {
-                throw FlutterError(code: ErrorCode.wrongArguments.rawValue, message: "Can't retrieve peripheral with provided UUID", details: call.debugDetails)
-            }
-
-            let transport = try handleSettingsManager(for: peripheral, call: call)
-
-            transport.connect { connectionResult in
-                switch connectionResult {
-                case .connected:
-                    result(nil)
-                case .deferred:
-                    result(nil)
-                case .failed(let error):
-                    result(FlutterError(code: Self.settingsManagerErrorCode,
-                                        message: "Failed to connect: \(error.localizedDescription)",
-                                        details: nil))
-                }
-            }
-        } else {
-            // Bluetooth not ready yet, queue the request and wait for delegate callback
-            initManagerResultQueue.enqueue((call: call, result: result))
-        }
+        // Settings and DFU share one readiness gate, including its timeout
+        // and permission failures. Never leave Settings in the removed queue.
+        waitForBluetooth(call: call, result: result)
     }
 
     private func handleSettingsManager(for peripheral: CBPeripheral, call: FlutterMethodCall) throws -> McuMgrBleTransport {
