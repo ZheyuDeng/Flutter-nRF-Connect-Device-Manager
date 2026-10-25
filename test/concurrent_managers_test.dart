@@ -102,6 +102,18 @@ void main() {
     await Future<void>.delayed(Duration.zero);
     expect(retryStates, [FirmwareUpgradeState.upload]);
     expect(rightStates, [FirmwareUpgradeState.upload]);
+
+    // The killed manager's late cancel must not end the retry's stream.
+    await emit(
+      stateChannel,
+      ProtoUpdateStateChangesStreamArg(
+        uuid: 'R',
+        updateStateChanges: ProtoUpdateStateChanges(canceled: true),
+      ).writeToBuffer(),
+    );
+    await emitState('R', ProtoUpdateStateChanges_FirmwareUpgradeState.RESET);
+    await Future<void>.delayed(Duration.zero);
+    expect(retryStates.last, FirmwareUpgradeState.reset);
     await left.kill();
     await retry.kill();
   });

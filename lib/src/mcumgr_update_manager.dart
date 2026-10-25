@@ -30,6 +30,11 @@ class DeviceUpdateManager extends FirmwareUpdateManager {
   StreamSubscription<ProtoUpdateStateChangesStreamArg>? _updateStateSubscription;
   StreamSubscription<ProtoProgressUpdateStreamArg>? _progressSubscription;
 
+  // Events are matched by device only, so a killed manager's late cancel for
+  // the same device reaches its replacement. Only honour a cancel this
+  // manager asked for.
+  bool _cancelRequested = false;
+
   DeviceUpdateManager._deviceIdentifier(this._deviceId)
       : this._logger = McuMgrLogger.deviceIdentifier(_deviceId);
 
@@ -139,8 +144,11 @@ class DeviceUpdateManager extends FirmwareUpdateManager {
   }
 
   @override
-  Future<void> cancel() async => await methodChannel.invokeMethod(
-      UpdateManagerMethod.cancel.rawValue, _deviceId);
+  Future<void> cancel() async {
+    _cancelRequested = true;
+    await methodChannel.invokeMethod(
+        UpdateManagerMethod.cancel.rawValue, _deviceId);
+  }
 
   @override
   Future<bool> inProgress() async => await methodChannel.invokeMethod(
@@ -189,6 +197,7 @@ class DeviceUpdateManager extends FirmwareUpdateManager {
 
       final stateChanges = data.updateStateChanges;
       if (stateChanges.canceled) {
+        if (!_cancelRequested) return;
         await stateController.close();
         return;
       }
