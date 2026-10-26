@@ -18,6 +18,15 @@ class McuMgrLogger extends FirmwareUpdateLogger {
       StreamController.broadcast();
   final String _deviceId;
 
+  // Shared across loggers for the same reason as the update manager's
+  // streams: a second `receiveBroadcastStream()` replaces the first handler.
+  static final Stream<ProtoLogMessageStreamArg> _logEvents =
+      UpdateLoggerChannel.logEventChannel
+          .receiveBroadcastStream()
+          .map((event) => ProtoLogMessageStreamArg.fromBuffer(event));
+
+  StreamSubscription<ProtoLogMessageStreamArg>? _logSubscription;
+
   McuMgrLogger.deviceIdentifier(this._deviceId) {
     _setupLogMessageStream();
   }
@@ -48,10 +57,15 @@ class McuMgrLogger extends FirmwareUpdateLogger {
     return proto.protoLogMessage.map((e) => e.convent()).toList();
   }
 
+  /// Stops this logger's events; a later manager for the same device gets its
+  /// own logger.
+  void detach() {
+    _logSubscription?.cancel();
+    _logSubscription = null;
+  }
+
   void _setupLogMessageStream() {
-    UpdateLoggerChannel.logEventChannel
-        .receiveBroadcastStream()
-        .map((event) => ProtoLogMessageStreamArg.fromBuffer(event))
+    _logSubscription = _logEvents
         .where((event) => event.uuid == _deviceId)
         .listen((data) {
       if (data.hasError() && !_logMessageStreamController.isClosed) {

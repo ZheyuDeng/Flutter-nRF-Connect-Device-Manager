@@ -13,6 +13,28 @@ class DeviceUpdateManager extends FirmwareUpdateManager {
   final String _deviceId;
   final McuMgrLogger _logger;
 
+  // Every device shares one native event channel. Each
+  // `receiveBroadcastStream()` call installs its own message handler and
+  // replaces the previous one, so per-manager calls left only the newest
+  // manager receiving events. Listen to one shared stream per channel and
+  // filter by device instead.
+  static final Stream<ProtoUpdateStateChangesStreamArg> _updateStateEvents =
+      UpdateManagerChannel.updateStateStream
+          .receiveBroadcastStream()
+          .map((event) => ProtoUpdateStateChangesStreamArg.fromBuffer(event));
+  static final Stream<ProtoProgressUpdateStreamArg> _progressEvents =
+      UpdateManagerChannel.progressStream
+          .receiveBroadcastStream()
+          .map((event) => ProtoProgressUpdateStreamArg.fromBuffer(event));
+
+  StreamSubscription<ProtoUpdateStateChangesStreamArg>? _updateStateSubscription;
+  StreamSubscription<ProtoProgressUpdateStreamArg>? _progressSubscription;
+
+  // Events are matched by device only, so a killed manager's late cancel for
+  // the same device reaches its replacement. Only honour a cancel this
+  // manager asked for.
+  bool _cancelRequested = false;
+
   DeviceUpdateManager._deviceIdentifier(this._deviceId)
       : this._logger = McuMgrLogger.deviceIdentifier(_deviceId);
 
@@ -122,8 +144,11 @@ class DeviceUpdateManager extends FirmwareUpdateManager {
   }
 
   @override
-  Future<void> cancel() async => await methodChannel.invokeMethod(
-      UpdateManagerMethod.cancel.rawValue, _deviceId);
+  Future<void> cancel() async {
+    _cancelRequested = true;
+    await methodChannel.invokeMethod(
+        UpdateManagerMethod.cancel.rawValue, _deviceId);
+  }
 
   @override
   Future<bool> inProgress() async => await methodChannel.invokeMethod(
@@ -134,9 +159,8 @@ class DeviceUpdateManager extends FirmwareUpdateManager {
       UpdateManagerMethod.isPaused.rawValue, _deviceId);
 
   void _setupProgressUpdateStream() {
-    UpdateManagerChannel.progressStream
-        .receiveBroadcastStream()
-        .map((event) => ProtoProgressUpdateStreamArg.fromBuffer(event))
+    _progressSubscription?.cancel();
+    _progressSubscription = _progressEvents
         .where((event) => event.uuid == _deviceId)
         .where((event) => event.hasProgressUpdate())
         .listen((event) {
@@ -146,9 +170,8 @@ class DeviceUpdateManager extends FirmwareUpdateManager {
   }
 
   void _setupUpdateStateStream() {
-    UpdateManagerChannel.updateStateStream
-        .receiveBroadcastStream()
-        .map((event) => ProtoUpdateStateChangesStreamArg.fromBuffer(event))
+    _updateStateSubscription?.cancel();
+    _updateStateSubscription = _updateStateEvents
         .where((event) => event.uuid == _deviceId)
         .listen((data) async {
       // Native side may emit late events after kill() has closed the
@@ -174,6 +197,7 @@ class DeviceUpdateManager extends FirmwareUpdateManager {
 
       final stateChanges = data.updateStateChanges;
       if (stateChanges.canceled) {
+        if (!_cancelRequested) return;
         await stateController.close();
         return;
       }
@@ -193,6 +217,9 @@ class DeviceUpdateManager extends FirmwareUpdateManager {
 
   @override
   Future<void> kill() async {
+    _updateStateSubscription?.cancel();
+    _progressSubscription?.cancel();
+    _logger.detach();
     [
       _progressStreamController,
       _updateInProgressStreamController,
