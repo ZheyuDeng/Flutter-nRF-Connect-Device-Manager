@@ -21,11 +21,22 @@ public class SwiftMcumgrFlutterPlugin: NSObject, FlutterPlugin {
     private var updateManagers: [String: UpdateManager] = [:]
     private var settingsManager: SettingsManager?
 
+    /// Lets the host app hand over a central it created earlier, and take it
+    /// back once the plugin is idle. iOS never powers on a central created
+    /// while the phone is locked, so an app that updates in the background
+    /// keeps a few it made while unlocked. The provider receives the queue the
+    /// central must use (`.main` here).
+    public static var centralManagerProvider: ((DispatchQueue) -> CBCentralManager)?
+    public static var centralManagerReleased: ((CBCentralManager) -> Void)?
+
     // Lazy initialization to avoid triggering Bluetooth permission at app startup
     private var _centralManager: CBCentralManager?
     private var centralManager: CBCentralManager {
         if _centralManager == nil {
-            _centralManager = CBCentralManager(delegate: self, queue: .main)
+            let central = Self.centralManagerProvider?(.main)
+                ?? CBCentralManager(delegate: nil, queue: .main)
+            central.delegate = self
+            _centralManager = central
         }
         return _centralManager!
     }
@@ -427,8 +438,10 @@ public class SwiftMcumgrFlutterPlugin: NSObject, FlutterPlugin {
         guard updateManagers.isEmpty, settingsManager == nil,
               _fsManagerPlugin?.isIdle ?? true,
               bluetoothReadyGate.isIdle else { return }
-        _centralManager?.delegate = nil
+        guard let central = _centralManager else { return }
+        central.delegate = nil
         _centralManager = nil
+        Self.centralManagerReleased?(central)
     }
 
     // MARK: Logs
